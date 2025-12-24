@@ -11,8 +11,6 @@ let initSDK: any;
 let createInstance: any;
 let SepoliaConfig: any;
 
-const CHAIN_ID = 11155111; // Sepolia
-
 // Convert Uint8Array to hex string with 0x prefix
 export function toHex(arr: Uint8Array): `0x${string}` {
   return `0x${Array.from(arr)
@@ -20,7 +18,13 @@ export function toHex(arr: Uint8Array): `0x${string}` {
     .join("")}`;
 }
 
-// Initialize FHEVM SDK
+// Get browser origin for relayer proxy URL
+function getRelayerProxyUrl(): string {
+  if (typeof window === "undefined") return "";
+  return `${window.location.origin}/api/relayer`;
+}
+
+// Initialize FHEVM SDK with custom relayerUrl pointing to our proxy
 export async function initFhevm(): Promise<any> {
   if (typeof window === "undefined") {
     throw new Error("FHEVM can only be initialized in browser");
@@ -56,7 +60,14 @@ export async function initFhevm(): Promise<any> {
 
     // thread: 0 disables multi-threading to avoid COOP/COEP header issues
     await initSDK({ thread: 0 });
-    fhevmInstance = await createInstance(SepoliaConfig);
+
+    // Override relayerUrl to use our proxy (bypasses CORS)
+    const customConfig = {
+      ...SepoliaConfig,
+      relayerUrl: getRelayerProxyUrl(),
+    };
+
+    fhevmInstance = await createInstance(customConfig);
     isInitialized = true;
     return fhevmInstance;
   } catch (error: any) {
@@ -104,7 +115,7 @@ export async function encryptAnswers(
   let packed = 0;
   for (let i = 0; i < 9 && i < answers.length; i++) {
     if (answers[i] === true) {
-      packed |= (1 << i);
+      packed |= 1 << i;
     }
   }
 
@@ -117,7 +128,10 @@ export async function encryptAnswers(
   };
 }
 
-// User private decryption via API proxy (bypasses CORS)
+/**
+ * User private decryption using SDK's built-in userDecrypt method
+ * SDK handles all relayer API details (format, retry, error codes)
+ */
 export async function userDecrypt(
   handles: string[],
   contractAddress: string,
@@ -133,85 +147,51 @@ export async function userDecrypt(
   // 1. Generate reencryption keypair
   const { publicKey, privateKey } = fhevm.generateKeypair();
 
-  // 2. Create EIP-712 signature request
-  const eip712 = fhevm.createEIP712(publicKey, [contractAddress]);
-
-  const startTimestamp = eip712.message.startTimestamp ?? Math.floor(Date.now() / 1000);
-  const durationDays = eip712.message.durationDays ?? 1;
-
-  const message = {
-    ...eip712.message,
-    startTimestamp: BigInt(startTimestamp),
-    durationDays: BigInt(durationDays),
-  };
-
-  // 3. User signs the reencryption request
-  const signature = await signer.signTypedData({
-    domain: eip712.domain,
-    types: eip712.types,
-    primaryType: eip712.primaryType,
-    message: message,
-  });
-
-  // 4. Convert keys to hex format
-  const publicKeyStr = publicKey instanceof Uint8Array ? toHex(publicKey) : publicKey;
-  const privateKeyStr = privateKey instanceof Uint8Array ? toHex(privateKey) : privateKey;
-
-  // 5. Build request body for relayer
+  // 2. Build handle-contract pairs
   const handleContractPairs = handles.map((handle) => ({
     handle,
     contractAddress,
   }));
 
-  const requestBody = {
-    chainId: CHAIN_ID,
+  // 3. Create EIP-712 signature request (SDK v0.3+ format)
+  const startTimestamp = Math.floor(Date.now() / 1000).toString();
+  const durationDays = "1";
+
+  const eip712 = fhevm.createEIP712(
+    publicKey,
+    [contractAddress],
+    startTimestamp,
+    durationDays
+  );
+
+  // 4. User signs the reencryption request
+  const signature = await signer.signTypedData(
+    eip712.domain,
+    { UserDecryptRequestVerification: eip712.types.UserDecryptRequestVerification },
+    eip712.message
+  );
+
+  // 5. Remove 0x prefix from signature (SDK requirement)
+  const signatureWithoutPrefix = signature.replace("0x", "");
+
+  // 6. Use SDK's built-in userDecrypt - handles all relayer details
+  const result = await fhevm.userDecrypt(
     handleContractPairs,
-    userPrivateKey: privateKeyStr,
-    userPublicKey: publicKeyStr,
-    signature,
-    contractAddresses: [contractAddress],
+    privateKey,
+    publicKey,
+    signatureWithoutPrefix,
+    [contractAddress],
     userAddress,
-    startTimestamp: String(startTimestamp),
-    durationDays: String(durationDays),
-  };
-
-  // 6. Call our API proxy (bypasses CORS)
-  const response = await fetch("/api/user-decrypt", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(requestBody),
-  });
-
-  if (!response.ok) {
-    const errorData = await response.json().catch(() => ({}));
-    throw new Error(errorData.error || `Decryption failed: ${response.status}`);
-  }
-
-  const result = await response.json();
+    startTimestamp,
+    durationDays
+  );
 
   // 7. Extract decrypted values
   const values: bigint[] = [];
-  
-  // Handle different response formats
-  if (result.clearValues) {
-    for (const handle of handles) {
-      const value = result.clearValues[handle];
-      if (value !== undefined) {
-        values.push(BigInt(value));
-      }
-    }
-  } else if (result.values) {
-    for (const v of result.values) {
-      values.push(BigInt(v));
-    }
-  } else {
-    // Try to decrypt locally using privateKey if reencrypted data returned
-    for (const handle of handles) {
-      const reencrypted = result[handle];
-      if (reencrypted) {
-        const decrypted = fhevm.decrypt(reencrypted, privateKeyStr);
-        values.push(BigInt(decrypted));
-      }
+  for (const handle of handles) {
+    const value = result[handle];
+    if (value !== undefined) {
+      values.push(BigInt(value));
     }
   }
 
