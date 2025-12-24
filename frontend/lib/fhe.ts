@@ -153,7 +153,7 @@ export async function userDecrypt(
     contractAddress,
   }));
 
-  // 3. Create EIP-712 signature request (SDK v0.3+ format)
+  // 3. Create EIP-712 signature request
   const startTimestamp = Math.floor(Date.now() / 1000).toString();
   const durationDays = "1";
 
@@ -165,11 +165,26 @@ export async function userDecrypt(
   );
 
   // 4. User signs the reencryption request
-  const signature = await signer.signTypedData(
-    eip712.domain,
-    { UserDecryptRequestVerification: eip712.types.UserDecryptRequestVerification },
-    eip712.message
-  );
+  // Get primaryType from SDK or use default
+  const primaryType = eip712.primaryType || "UserDecryptRequestVerification";
+  
+  // Build types object for viem
+  const types: Record<string, any> = {};
+  if (eip712.types) {
+    // Copy all types except EIP712Domain (viem adds it automatically)
+    for (const [key, value] of Object.entries(eip712.types)) {
+      if (key !== "EIP712Domain") {
+        types[key] = value;
+      }
+    }
+  }
+
+  const signature = await signer.signTypedData({
+    domain: eip712.domain,
+    types: types,
+    primaryType: primaryType,
+    message: eip712.message,
+  });
 
   // 5. Remove 0x prefix from signature (SDK requirement)
   const signatureWithoutPrefix = signature.replace("0x", "");
