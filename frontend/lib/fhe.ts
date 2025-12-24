@@ -11,6 +11,8 @@ let initSDK: any;
 let createInstance: any;
 let SepoliaConfig: any;
 
+const CHAIN_ID = 11155111; // Sepolia
+
 // Convert Uint8Array to hex string with 0x prefix
 export function toHex(arr: Uint8Array): `0x${string}` {
   return `0x${Array.from(arr)
@@ -87,12 +89,11 @@ export function getFhevmStatus(): {
 export async function encryptAnswers(
   contractAddress: string,
   userAddress: string,
-  answers: (boolean | null)[] // 9 answers (true = agree, false = disagree, null = unanswered)
+  answers: (boolean | null)[]
 ): Promise<{
   packedHandle: `0x${string}`;
   inputProof: `0x${string}`;
 }> {
-  // Validate all answers are provided
   if (answers.some((a) => a === null)) {
     throw new Error("All questions must be answered before encrypting");
   }
@@ -100,7 +101,6 @@ export async function encryptAnswers(
   const fhevm = await initFhevm();
   const input = fhevm.createEncryptedInput(contractAddress, userAddress);
 
-  // Pack 9 answers into bitmask
   let packed = 0;
   for (let i = 0; i < 9 && i < answers.length; i++) {
     if (answers[i] === true) {
@@ -108,9 +108,7 @@ export async function encryptAnswers(
     }
   }
 
-  // Add as uint16
   input.add16(BigInt(packed));
-
   const encrypted = await input.encrypt();
 
   return {
@@ -119,15 +117,14 @@ export async function encryptAnswers(
   };
 }
 
-// User private decryption using SDK's built-in userDecrypt
+// User private decryption via API proxy (bypasses CORS)
 export async function userDecrypt(
   handles: string[],
   contractAddress: string,
-  signer: any // viem WalletClient
+  signer: any
 ): Promise<bigint[]> {
   const fhevm = await initFhevm();
 
-  // Get user address from viem WalletClient
   const userAddress = signer.account?.address;
   if (!userAddress) {
     throw new Error("Cannot get user address from signer");
@@ -139,18 +136,16 @@ export async function userDecrypt(
   // 2. Create EIP-712 signature request
   const eip712 = fhevm.createEIP712(publicKey, [contractAddress]);
 
-  // 3. Get startTimestamp and durationDays from EIP712 message
   const startTimestamp = eip712.message.startTimestamp ?? Math.floor(Date.now() / 1000);
   const durationDays = eip712.message.durationDays ?? 1;
 
-  // Prepare message with BigInt values (required by EIP-712)
   const message = {
     ...eip712.message,
     startTimestamp: BigInt(startTimestamp),
     durationDays: BigInt(durationDays),
   };
 
-  // 4. User signs the reencryption request
+  // 3. User signs the reencryption request
   const signature = await signer.signTypedData({
     domain: eip712.domain,
     types: eip712.types,
@@ -158,34 +153,65 @@ export async function userDecrypt(
     message: message,
   });
 
-  // 5. Convert keys to hex format
+  // 4. Convert keys to hex format
   const publicKeyStr = publicKey instanceof Uint8Array ? toHex(publicKey) : publicKey;
   const privateKeyStr = privateKey instanceof Uint8Array ? toHex(privateKey) : privateKey;
 
-  // 6. Build handle-contract pairs
+  // 5. Build request body for relayer
   const handleContractPairs = handles.map((handle) => ({
     handle,
     contractAddress,
   }));
 
-  // 7. Use SDK's built-in userDecrypt
-  const results = await fhevm.userDecrypt(
+  const requestBody = {
+    chainId: CHAIN_ID,
     handleContractPairs,
-    privateKeyStr,
-    publicKeyStr,
+    userPrivateKey: privateKeyStr,
+    userPublicKey: publicKeyStr,
     signature,
-    [contractAddress],
+    contractAddresses: [contractAddress],
     userAddress,
-    String(startTimestamp),
-    String(durationDays)
-  );
+    startTimestamp: String(startTimestamp),
+    durationDays: String(durationDays),
+  };
 
-  // 8. Extract decrypted values
+  // 6. Call our API proxy (bypasses CORS)
+  const response = await fetch("/api/user-decrypt", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(requestBody),
+  });
+
+  if (!response.ok) {
+    const errorData = await response.json().catch(() => ({}));
+    throw new Error(errorData.error || `Decryption failed: ${response.status}`);
+  }
+
+  const result = await response.json();
+
+  // 7. Extract decrypted values
   const values: bigint[] = [];
-  for (const handle of handles) {
-    const value = results[handle];
-    if (value !== undefined) {
-      values.push(BigInt(value));
+  
+  // Handle different response formats
+  if (result.clearValues) {
+    for (const handle of handles) {
+      const value = result.clearValues[handle];
+      if (value !== undefined) {
+        values.push(BigInt(value));
+      }
+    }
+  } else if (result.values) {
+    for (const v of result.values) {
+      values.push(BigInt(v));
+    }
+  } else {
+    // Try to decrypt locally using privateKey if reencrypted data returned
+    for (const handle of handles) {
+      const reencrypted = result[handle];
+      if (reencrypted) {
+        const decrypted = fhevm.decrypt(reencrypted, privateKeyStr);
+        values.push(BigInt(decrypted));
+      }
     }
   }
 
