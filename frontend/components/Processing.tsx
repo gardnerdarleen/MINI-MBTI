@@ -30,6 +30,8 @@ export function Processing() {
 
   const { isSuccess: isTxSuccess } = useWaitForTransactionReceipt({
     hash: hash,
+    confirmations: 1,
+    pollingInterval: 2000, // Poll every 2s instead of default 4s
   });
 
   // Read score handles after tx success
@@ -188,7 +190,7 @@ export function Processing() {
           
           {phase === "waiting" && (
             <p className="text-xs text-muted-foreground/70 mb-6">
-              {waitTime}s elapsed · ~30-60s typical
+              {waitTime}s elapsed · {waitTime < 60 ? "~30-90s typical" : "FHE takes time, hang tight!"}
             </p>
           )}
           {phase !== "waiting" && <div className="mb-6" />}
