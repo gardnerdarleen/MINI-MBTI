@@ -28,10 +28,18 @@ export function Processing() {
 
   const { writeContract, data: hash, error: writeError } = useWriteContract();
 
-  const { isSuccess: isTxSuccess, isLoading: isTxLoading } = useWaitForTransactionReceipt({
+  const { isSuccess: isTxSuccess } = useWaitForTransactionReceipt({
     hash: hash,
     confirmations: 1,
     pollingInterval: 2000,
+  });
+
+  // Read score handles after tx success
+  const { data: scoreHandles, refetch: refetchScores } = useReadContract({
+    address: CONTRACT_ADDRESS,
+    abi: CONTRACT_ABI,
+    functionName: "getScoreHandles",
+    account: address,
   });
 
   // Fallback: manually check tx after 30s if still waiting
@@ -43,20 +51,11 @@ export function Processing() {
     if (waitTime % 10 === 0) {
       refetchScores().then(({ data }) => {
         if (data) {
-          // Transaction succeeded but wagmi didn't detect it
           setPhase("decrypting");
         }
       });
     }
   }, [phase, hash, isTxSuccess, waitTime, refetchScores]);
-
-  // Read score handles after tx success
-  const { data: scoreHandles, refetch: refetchScores } = useReadContract({
-    address: CONTRACT_ADDRESS,
-    abi: CONTRACT_ABI,
-    functionName: "getScoreHandles",
-    account: address,
-  });
 
   // Step 1: Encrypt answers
   useEffect(() => {
