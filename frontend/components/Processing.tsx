@@ -73,7 +73,7 @@ export function Processing() {
         encryptedData.packedHandle,
         encryptedData.inputProof,
       ],
-      gas: 1500000n, // Reduced gas for simpler computation
+      // Let wagmi auto-estimate gas and gas price
     });
   }, [phase, encryptedData, hash]);
 
