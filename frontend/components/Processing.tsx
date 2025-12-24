@@ -16,6 +16,7 @@ export function Processing() {
 
   const [phase, setPhase] = useState<ProcessingPhase>("encrypting");
   const [error, setError] = useState<string | null>(null);
+  const [waitTime, setWaitTime] = useState(0);
   const [encryptedData, setEncryptedData] = useState<{
     packedHandle: `0x${string}`;
     inputProof: `0x${string}`;
@@ -131,6 +132,16 @@ export function Processing() {
     }
   }, [writeError]);
 
+  // Timer for waiting phase
+  useEffect(() => {
+    if (phase !== "waiting") {
+      setWaitTime(0);
+      return;
+    }
+    const timer = setInterval(() => setWaitTime((t) => t + 1), 1000);
+    return () => clearInterval(timer);
+  }, [phase]);
+
   const phases = [
     { key: "encrypting", label: "Encrypting", icon: Lock, color: "bg-accent" },
     { key: "submitting", label: "Submitting", icon: Send, color: "bg-secondary" },
@@ -167,13 +178,20 @@ export function Processing() {
             {phase === "complete" && "Complete!"}
           </h2>
 
-          <p className="text-muted-foreground mb-8">
+          <p className="text-muted-foreground mb-2">
             {phase === "encrypting" && "Securing your answers..."}
             {phase === "submitting" && "Please confirm in your wallet..."}
             {phase === "waiting" && "FHE magic happening on-chain..."}
             {phase === "decrypting" && "Sign to reveal your results..."}
             {phase === "complete" && "Your personality profile is ready!"}
           </p>
+          
+          {phase === "waiting" && (
+            <p className="text-xs text-muted-foreground/70 mb-6">
+              {waitTime}s elapsed · ~30-60s typical
+            </p>
+          )}
+          {phase !== "waiting" && <div className="mb-6" />}
 
           {/* Progress steps */}
           <div className="flex justify-center gap-2 mb-6">
