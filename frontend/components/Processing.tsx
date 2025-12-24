@@ -73,7 +73,9 @@ export function Processing() {
         encryptedData.packedHandle,
         encryptedData.inputProof,
       ],
-      // Let wagmi auto-estimate gas and gas price
+      // Force reasonable gas price for Sepolia (MetaMask estimates too low)
+      maxFeePerGas: 10000000000n, // 10 Gwei
+      maxPriorityFeePerGas: 5000000000n, // 5 Gwei
     });
   }, [phase, encryptedData, hash]);
 
