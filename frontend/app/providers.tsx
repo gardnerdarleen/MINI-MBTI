@@ -21,11 +21,22 @@ const connectors = connectorsForWallets(
   }
 );
 
+// Use reliable Sepolia RPCs with fallback
+const SEPOLIA_RPCS = [
+  "https://ethereum-sepolia-rpc.publicnode.com",
+  "https://rpc.sepolia.org",
+  "https://sepolia.drpc.org",
+];
+
 const config = createConfig({
   connectors,
   chains: [sepolia],
   transports: {
-    [sepolia.id]: http(),
+    [sepolia.id]: http(SEPOLIA_RPCS[0], {
+      batch: true,
+      retryCount: 3,
+      retryDelay: 1000,
+    }),
   },
   ssr: true,
 });

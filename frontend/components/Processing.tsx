@@ -28,11 +28,27 @@ export function Processing() {
 
   const { writeContract, data: hash, error: writeError } = useWriteContract();
 
-  const { isSuccess: isTxSuccess } = useWaitForTransactionReceipt({
+  const { isSuccess: isTxSuccess, isLoading: isTxLoading } = useWaitForTransactionReceipt({
     hash: hash,
     confirmations: 1,
-    pollingInterval: 2000, // Poll every 2s instead of default 4s
+    pollingInterval: 2000,
   });
+
+  // Fallback: manually check tx after 30s if still waiting
+  useEffect(() => {
+    if (phase !== "waiting" || !hash || isTxSuccess) return;
+    if (waitTime < 30) return;
+
+    // Every 10s after 30s, force refetch scores to check if tx succeeded
+    if (waitTime % 10 === 0) {
+      refetchScores().then(({ data }) => {
+        if (data) {
+          // Transaction succeeded but wagmi didn't detect it
+          setPhase("decrypting");
+        }
+      });
+    }
+  }, [phase, hash, isTxSuccess, waitTime, refetchScores]);
 
   // Read score handles after tx success
   const { data: scoreHandles, refetch: refetchScores } = useReadContract({
